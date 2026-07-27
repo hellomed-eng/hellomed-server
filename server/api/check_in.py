@@ -1,3 +1,4 @@
+import requests
 import flask
 import server
 from datetime import datetime, date
@@ -84,6 +85,25 @@ def _format_check_in_for_emit(check_in_to_emit):
     return check_in_to_emit
 
 
+REVIEW_AUTOMATION_URL = "https://autoreviewrequest.vercel.app/api/checkin"
+
+
+def trigger_review_automation(name, phone):
+    """
+    Fire-and-forget call to the review-request automation. Wrapped in
+    try/except so a failure here never breaks the actual check-in submission.
+    Only sends name/phone — no clinical data.
+    """
+    try:
+        requests.post(
+            REVIEW_AUTOMATION_URL,
+            json={"name": name, "phone": phone},
+            timeout=3,
+        )
+    except Exception as e:
+        server.application.logger.warning(f"Review automation call failed: {e}")
+
+
 @server.application.route("/api/v1/check-in/", methods=["POST"])
 def post_check_in():
     """
@@ -129,6 +149,8 @@ def post_check_in():
     check_in_to_emit = _format_check_in_for_emit(cursor.fetchone())
 
     server.sio.emit("new-checkin", check_in_to_emit)
+
+    trigger_review_automation(body.get("name"), body.get("phone"))
 
     return flask.jsonify({"id": inserted_check_in_id, "formType": row["formType"]}), 200
 
