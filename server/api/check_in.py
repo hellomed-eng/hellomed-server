@@ -86,7 +86,30 @@ def _format_check_in_for_emit(check_in_to_emit):
 
 
 REVIEW_AUTOMATION_URL = "https://autoreviewrequest.vercel.app/api/checkin"
-
+def _lookup_phone_on_file(name, birth_date):
+    """
+    Best-effort lookup of a phone number from this patient's most recent
+    prior check-in, used when a returning patient doesn't retype their
+    phone number (it's optional on that form).
+    """
+    if not name or not birth_date:
+        return None
+    cursor = server.model.Cursor()
+    cursor.execute(
+        """
+        SELECT phone
+        FROM check_ins
+        WHERE name = %(name)s
+          AND birthDate = %(birthDate)s
+          AND phone IS NOT NULL
+          AND phone != ''
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        {"name": name, "birthDate": birth_date},
+    )
+    row = cursor.fetchone()
+    return row["phone"] if row else None
 
 def trigger_review_automation(name, phone):
     """
@@ -94,12 +117,22 @@ def trigger_review_automation(name, phone):
     try/except so a failure here never breaks the actual check-in submission.
     Only sends name/phone — no clinical data.
     """
+    if not name or not phone:
+        server.application.logger.warning(
+            f"Review automation skipped: missing name or phone "
+            f"(has_name={bool(name)}, has_phone={bool(phone)})"
+        )
+        return
     try:
-        requests.post(
+        resp = requests.post(
             REVIEW_AUTOMATION_URL,
             json={"name": name, "phone": phone},
             timeout=3,
         )
+        if resp.status_code >= 400:
+            server.application.logger.warning(
+                f"Review automation call returned {resp.status_code}: {resp.text}"
+            )
     except Exception as e:
         server.application.logger.warning(f"Review automation call failed: {e}")
 
@@ -150,7 +183,13 @@ def post_check_in():
 
     server.sio.emit("new-checkin", check_in_to_emit)
 
-    trigger_review_automation(body.get("name"), body.get("phone"))
+    phone_for_review = body.get("phone")
+    if isinstance(phone_for_review, str) and phone_for_review.strip() == "":
+        phone_for_review = None
+    if phone_for_review is None:
+        phone_for_review = _lookup_phone_on_file(body.get("name"), body.get("birthDate"))
+
+    trigger_review_automation(body.get("name"), phone_for_review)
 
     return flask.jsonify({"id": inserted_check_in_id, "formType": row["formType"]}), 200
 
