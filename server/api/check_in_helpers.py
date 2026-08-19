@@ -17,6 +17,7 @@ REQUIRED_NEW = (
 REQUIRED_RETURNING = (
     "name",
     "birthDate",
+    "phone",
     "reasonForVisit",
     "medicalHistoryChanged",
     "medicationsChanged",
